@@ -30,6 +30,10 @@ class Runner(
     private var loop = 1
     private var stepStart = 0L
     private var heldFor = 0L
+
+    /** When the next frame is due, so Pause can give back the rest of a delay instead of eating it. */
+    private var tickDueAt = 0L
+    private var heldTick = 0L
     private var running = false
     private var paused = false
 
@@ -46,14 +50,18 @@ class Runner(
         running = true
         paused = false
         stepStart = System.currentTimeMillis()
-        main.post(tick)
+        schedule(0)
     }
 
     /** Holds the step clock, so resuming does not immediately time the step out. */
     fun pause() {
         if (!running || paused) return
         paused = true
-        heldFor = System.currentTimeMillis() - stepStart
+        val now = System.currentTimeMillis()
+        heldFor = now - stepStart
+        // Pausing inside a post-step delay must not swallow the rest of it: that delay is what
+        // keeps the next step from matching the screen the app has not navigated away from yet.
+        heldTick = (tickDueAt - now).coerceAtLeast(0)
         main.removeCallbacks(tick)
         onState("paused by you  ${where()}")
     }
@@ -62,7 +70,12 @@ class Runner(
         if (!running || !paused) return
         paused = false
         stepStart = System.currentTimeMillis() - heldFor
-        main.post(tick)
+        schedule(heldTick)
+    }
+
+    private fun schedule(delayMs: Long) {
+        tickDueAt = System.currentTimeMillis() + delayMs
+        main.postDelayed(tick, delayMs)
     }
 
     fun stop(why: String) {
@@ -88,7 +101,7 @@ class Runner(
     }
 
     private fun again() {
-        if (running && !paused) main.postDelayed(tick, ShadowService.CAPTURE_INTERVAL_MS)
+        if (running && !paused) schedule(ShadowService.CAPTURE_INTERVAL_MS)
     }
 
     private fun onFrame(frame: Bitmap?) {
@@ -132,7 +145,7 @@ class Runner(
             dispatch(w, m) { ok ->
                 if (!running) return@dispatch
                 if (!ok) return@dispatch halt("the system rejected a watcher gesture")
-                main.postDelayed(tick, w.postDelayMs)
+                schedule(w.postDelayMs)
             }
             return
         }
@@ -163,7 +176,7 @@ class Runner(
         i++
         if (i < macro.steps.size) {
             stepStart = System.currentTimeMillis()
-            main.postDelayed(tick, step.postDelayMs)
+            schedule(step.postDelayMs)
             return
         }
         if (macro.loops != 0 && loop >= macro.loops) {
@@ -174,7 +187,7 @@ class Runner(
         loop++
         i = 0
         stepStart = System.currentTimeMillis()
-        main.postDelayed(tick, step.postDelayMs)
+        schedule(step.postDelayMs)
     }
 
     private fun dispatch(s: Step, m: MatchResult, done: (Boolean) -> Unit) {

@@ -173,9 +173,12 @@ Record and replay work end to end. Verified by driving the phone over adb:
 - One macro slot only (`macros/default`). Loops, the step editor and watchers are M3.
 - `busy` refuses a second touch while a step is being saved (~400 ms), so fast tapping drops
   touches rather than recording them out of order.
-- **The service process gets killed.** Seen on device: the whole process was gone, so the overlay
-  vanished and had to be brought back by opening the app. Set the app's battery usage to
-  **Unrestricted** in OxygenOS before any long run.
+- **`adb shell uiautomator dump` unbinds and re-binds the accessibility service.** Measured: one
+  dump logs `unbind` then `connected` with the same PID, so the process is alive and nothing was
+  killed. A rebind runs `onUnbind`, which hides the overlay and **silently stops a run**, so never
+  dump while a macro is playing. This, not a process kill, is what made the panel vanish and the
+  readout go stale during M2 and M3 testing. (Battery usage should still be set to **Unrestricted**
+  in OxygenOS before a long run, as a precaution -- that part was never actually observed.)
 - MainActivity draws its first two rows under the action bar. Cosmetic; the buttons still work.
 - Swipe and long-press replay are untested; only a tap has been round-tripped.
 
@@ -235,4 +238,25 @@ Pause and Resume while a run is going, and the readout carries `step 2/5  loop 3
   navigated: the post-step delay is the only guard. Raise that step's delay in the editor.
 - Re-record sends you out of the editor and waits for the next Rec touch; there is no visible
   reminder other than the panel's readout.
+- **A replayed swipe does not reproduce the same scroll distance.** It scrolls -- verified -- but
+  only start, end and duration are recorded, so `dispatchGesture` draws a straight linear drag with
+  none of the original velocity curve, and an inertial list lands somewhere else. From the same
+  starting screen (2.7 apart) the two end states were 37 grey levels per pixel apart.
+  `shortcut: swipes are replayed as a linear drag; record the intermediate MOVE points and replay
+  them as a multi-point stroke if scroll distance ever has to match.`
+- A Clear press once did nothing with no trace. Panel clicks are now logged (`panel <label>`), so a
+  repeat will show whether the touch reached the button.
 - One macro slot. Multiple macros, run logs and export/import are M4.
+
+### Also verified on device (24 Nov 2026)
+- **Pause holds the clock.** A run waiting on step 1 (15 s timeout) was paused at 4 s, left for 22 s,
+  and resumed: the readout went back to `waiting 0.470 6s`, not 26 s, so the step did not time out
+  over the pause. The button cycles Play -> Pause -> Resume.
+- **Pausing inside a post-step delay keeps the rest of it.** The runner now records when the next
+  frame was due and resumes with the remainder, instead of firing immediately and reopening the
+  same-screen race.
+- **Editor operations, each checked against the files on disk.** Down swapped two steps; Delete
+  removed the step and its PNG; Re-record kept the step count and the tuned 3000 ms delay, wrote a
+  new template, deleted the old PNG, and disarmed itself after the one touch.
+- **The panel stays hidden in the editor through a forced rebind.** With the step dialog open, a
+  `uiautomator dump` (which re-binds the service) did not put the panel back.

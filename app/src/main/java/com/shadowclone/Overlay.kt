@@ -144,7 +144,12 @@ class Overlay(private val svc: ShadowService) {
     private fun style(b: Button, label: String, onClick: () -> Unit) {
         b.text = label
         b.textSize = 11f
-        b.setOnClickListener { onClick() }
+        // Logged because a Clear once had no effect and there was no way to tell whether the
+        // touch reached the button at all.
+        b.setOnClickListener {
+            Log.i(ShadowService.TAG, "panel ${b.text}")
+            onClick()
+        }
     }
 
     private fun button(label: String, onClick: () -> Unit) =
