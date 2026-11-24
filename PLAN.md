@@ -170,9 +170,13 @@ Record and replay work end to end. Verified by driving the phone over adb:
 - **M1's Crop / Watch / Tap / Frame buttons are gone** — the recorder replaces them.
 
 ### Known, not fixed
-- **No-tap stop rules are not verified on device yet.** The code path is written and the touch was
-  correctly not passed through, but the rule did not get saved in the one attempt made before the
-  phone was back in use. Needs a rerun.
+- **No-tap stop rules are not verified on device.** The one attempt saved no rule, and Gmail did
+  not open either -- which fits the touch being eaten and the save failing, but equally fits the
+  touch never reaching the overlay. Unknown until it is rerun; `recorded()` now logs every exit to
+  logcat under `ShadowClone` so the next attempt is diagnosable.
+- **The foreground pause is still unproven.** The replay that passed ran right after a reinstall,
+  when the package was null, and null used to skip the check. Null now pauses, so the real test is:
+  open another app, press Play (must say paused), press HOME, it must resume.
 - Swipe replay is untested; only a tap has been round-tripped.
 - One macro slot only (`macros/default`). Loops, the step editor and watchers are M3.
 - `busy` refuses a second touch while a step is being saved (~400 ms), so fast tapping drops

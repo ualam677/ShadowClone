@@ -5,6 +5,7 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -179,6 +180,7 @@ class Overlay(private val svc: ShadowService) {
     }
 
     private fun recorded(sx: Float, sy: Float, ex: Float, ey: Float, heldMs: Long) {
+        Log.i(ShadowService.TAG, "touch ($sx,$sy)->($ex,$ey) ${heldMs}ms busy=$busy stops=$recordingStops")
         if (busy) {
             status("too fast - wait for the step to save")
             return
@@ -186,45 +188,59 @@ class Overlay(private val svc: ShadowService) {
         busy = true
         val stop = recordingStops
         val act = if (stop) Act.STOP else Macro.classify(ex - sx, ey - sy, heldMs)
+        // takeScreenshot catches our own windows, so anything the HUD is drawing would end up in
+        // the template and drag the score down at replay, when it is not there.
+        hud.showMarks = false
+        hud.matchBox = null
+        hud.invalidate()
         // We ate the touch, so the app has not reacted yet: a frame taken now is the screen the
         // user acted on, which is exactly the screen replay has to wait for.
-        svc.captureWhenAllowed { frame ->
-            if (frame == null) {
-                busy = false
-                status("capture failed")
-                return@captureWhenAllowed
-            }
-            val c = crop(frame, sx.toInt(), sy.toInt())
-            if (c == null) {
-                busy = false
-                status("that area is blank - touch something with detail")
-                return@captureWhenAllowed
-            }
-            val (bmp, box) = c
-            val name = (if (stop) "s" else "t") + System.currentTimeMillis() + ".png"
-            FileOutputStream(File(Macro.dir(svc), name)).use {
-                bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
-            }
-            val step = Step(
-                act = act, tx = box.left, ty = box.top,
-                x = sx.toInt(), y = sy.toInt(), x2 = ex.toInt(), y2 = ey.toInt(),
-                durationMs = heldMs.coerceIn(60L, 10_000L), template = name,
-                threshold = if (stop) Macro.STOP_THRESHOLD else Macro.STEP_THRESHOLD,
-            )
-            if (stop) macro.stops += step else macro.steps += step
-            Macro.save(svc, macro)
-            hud.matchBox = box
-            hud.invalidate()
+        main.postDelayed({ svc.captureWhenAllowed { frame -> saveStep(frame, sx, sy, ex, ey, heldMs, act, stop) } }, 40L)
+    }
 
-            if (stop) {
-                // A no-tap screen must never be touched, so this touch is not passed through.
+    private fun saveStep(
+        frame: Bitmap?, sx: Float, sy: Float, ex: Float, ey: Float,
+        heldMs: Long, act: Act, stop: Boolean,
+    ) {
+        hud.showMarks = true
+        if (frame == null) {
+            busy = false
+            Log.w(ShadowService.TAG, "record: capture failed")
+            status("capture failed")
+            return
+        }
+        val c = crop(frame, sx.toInt(), sy.toInt())
+        if (c == null) {
+            busy = false
+            Log.w(ShadowService.TAG, "record: crop too flat at ($sx,$sy)")
+            status("that area is blank - touch something with detail")
+            return
+        }
+        val (bmp, box) = c
+        val name = (if (stop) "s" else "t") + System.currentTimeMillis() + ".png"
+        FileOutputStream(File(Macro.dir(svc), name)).use {
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+        val step = Step(
+            act = act, tx = box.left, ty = box.top,
+            x = sx.toInt(), y = sy.toInt(), x2 = ex.toInt(), y2 = ey.toInt(),
+            durationMs = heldMs.coerceIn(60L, 10_000L), template = name,
+            threshold = if (stop) Macro.STOP_THRESHOLD else Macro.STEP_THRESHOLD,
+        )
+        if (stop) macro.stops += step else macro.steps += step
+        Macro.save(svc, macro)
+        hud.matchBox = box
+        hud.invalidate()
+        Log.i(ShadowService.TAG, "record: saved $act $name box=$box stops=$stop")
+
+        if (stop) {
+            // A no-tap screen must never be touched, so this touch is not passed through.
+            busy = false
+            status("no-tap ${macro.stops.size} saved, touch NOT passed through")
+        } else {
+            svc.gesture(step, 0, 0) { ok ->
                 busy = false
-                status("no-tap ${macro.stops.size} saved, touch NOT passed through")
-            } else {
-                svc.gesture(step, 0, 0) { ok ->
-                    busy = false
-                    status("step ${macro.steps.size}: $act" + if (ok) "" else " (not passed through!)")
-                }
+                status("step ${macro.steps.size}: $act" + if (ok) "" else " (not passed through!)")
             }
         }
     }

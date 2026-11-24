@@ -71,7 +71,8 @@ class Runner(
 
         val fg = svc.currentPackage()
         val want = macro.pkg
-        if (want != null && fg != null && fg != want) {
+        // A null reading pauses too: a lookup that quietly fails must not disable the guard.
+        if (want != null && fg != want) {
             // Paused, not failed: hold the clock, or coming back would time the step out at once.
             stepStart = System.currentTimeMillis()
             onState("paused: $fg in front, want $want")

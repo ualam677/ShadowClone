@@ -40,7 +40,11 @@ class HudView(context: Context) : View(context) {
         setWillNotDraw(false)
     }
 
+    /** Cleared while a template is being captured: whatever we draw lands in the screenshot. */
+    var showMarks = true
+
     override fun onDraw(canvas: Canvas) {
+        if (!showMarks) return
         if (recordMode) canvas.drawRect(5f, 5f, width - 5f, height - 5f, red)
         matchBox?.let { canvas.drawRect(it, green) }
     }
