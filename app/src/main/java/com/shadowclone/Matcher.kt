@@ -5,6 +5,7 @@ import android.graphics.Rect
 import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.Mat
+import org.opencv.core.MatOfDouble
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import kotlin.math.abs
@@ -36,6 +37,17 @@ object Matcher {
         val cy = r.top + ((mm.maxLoc.y + t.rows() / 2.0) / SCALE).toInt()
         f.release(); t.release(); out.release()
         return MatchResult(mm.maxVal, cx, cy, (System.nanoTime() - t0) / 1_000_000)
+    }
+
+    /** Grayscale spread. A flat crop (plain background) matches almost anything, so recording checks it. */
+    fun stdDev(bmp: Bitmap): Double {
+        val g = gray(bmp)
+        val mean = MatOfDouble()
+        val sd = MatOfDouble()
+        Core.meanStdDev(g, mean, sd)
+        val v = sd.toArray().firstOrNull() ?: 0.0
+        g.release(); mean.release(); sd.release()
+        return v
     }
 
     private fun gray(bmp: Bitmap): Mat {

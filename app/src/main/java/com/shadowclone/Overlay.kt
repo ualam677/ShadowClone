@@ -1,7 +1,6 @@
 package com.shadowclone
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Handler
@@ -16,14 +15,15 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * Milestone 1 overlay: crop a template off the screen, watch for it live, tap where it matched.
- * Two windows: a full-screen HUD that only draws, and a small touchable control panel.
+ * Record / replay controls. Two windows: the HUD draws, and eats touches while recording; the panel
+ * holds the buttons and is never recorded, because touches on it never reach the HUD.
  */
 class Overlay(private val svc: ShadowService) {
 
     private companion object {
-        const val TEMPLATE_FILE = "m1_template.png"
-        const val TAP_THRESHOLD = 0.8
+        /** Below this grayscale spread a crop is near-flat and would match almost any screen. */
+        const val FLAT_STDDEV = 8.0
+        val CROP_HALF = intArrayOf(100, 200, 320)
     }
 
     private val wm = svc.getSystemService(WindowManager::class.java)
@@ -32,12 +32,17 @@ class Overlay(private val svc: ShadowService) {
     private val hud = HudView(svc)
     private val readout = TextView(svc)
     private val panel = LinearLayout(svc)
-    private val watchBtn = Button(svc)
+    private val recBtn = Button(svc)
+    private val noTapBtn = Button(svc)
 
-    private var template: Bitmap? = null
-    private var cropSource: Bitmap? = null
-    private var watching = false
-    private var last: MatchResult? = null
+    private var macro = Macro.load(svc)
+    private var runner: Runner? = null
+    private var recording = false
+    private var recordingStops = false
+
+    /** Set from touch-up until the step is saved and re-dispatched; further touches are refused
+     *  rather than passed through, or the recording would drift from what the app actually got. */
+    private var busy = false
     private var panelAtTop = false
 
     private val hudParams = WindowManager.LayoutParams(
@@ -72,62 +77,72 @@ class Overlay(private val svc: ShadowService) {
         readout.setTextColor(0xFFFFFFFF.toInt())
         readout.textSize = 11f
         readout.setPadding(12, 8, 12, 8)
-        readout.text = "no template"
 
         panel.orientation = LinearLayout.VERTICAL
         panel.setBackgroundColor(0x99000000.toInt())
         panel.addView(readout)
 
-        // Two rows: six buttons in one row overflow 1080 px and the last ones fall off screen.
-        val top = LinearLayout(svc)
-        top.orientation = LinearLayout.HORIZONTAL
-        top.addView(button("Crop") { startCrop() })
-        top.addView(watchBtn.also { b ->
-            b.text = "Watch"
-            b.textSize = 11f
-            b.setOnClickListener { if (watching) stopWatch() else startWatch() }
-        })
-        top.addView(button("Tap") { tapMatch() })
-        panel.addView(top)
+        // Three per row: six buttons in one row overflow 1080 px and the last ones fall off screen.
+        panel.addView(
+            row(
+                recBtn.also { style(it, "Rec") { arm(stops = false) } },
+                noTapBtn.also { style(it, "No-Tap") { arm(stops = true) } },
+                button("Play") { play() },
+            )
+        )
+        panel.addView(
+            row(
+                button("Stop") { stopAll("stopped") },
+                button("Clear") { clear() },
+                button("Test") { selfTest() },
+            )
+        )
+        panel.addView(
+            row(
+                button("Move") { movePanel() },
+                button("Hide") { main.post { svc.toggleOverlay() } },
+            )
+        )
 
-        val bottom = LinearLayout(svc)
-        bottom.orientation = LinearLayout.HORIZONTAL
-        bottom.addView(button("Frame") { saveFrame() })
-        bottom.addView(button("Test") { selfTest() })
-        bottom.addView(button("Move") { movePanel() })
-        panel.addView(bottom)
-
-        hud.onCropDone = { r -> finishCrop(r) }
+        hud.onGesture = { sx, sy, ex, ey, held -> recorded(sx, sy, ex, ey, held) }
         wm.addView(hud, hudParams)
         wm.addView(panel, panelParams)
-
-        // Survive a service restart: the last template is on disk.
-        val saved = File(svc.filesDir, TEMPLATE_FILE)
-        if (saved.exists()) {
-            template = BitmapFactory.decodeFile(saved.path)
-            template?.let { readout.text = "template ${it.width}x${it.height} (restored)" }
-        }
+        status()
     }
 
     fun hide() {
-        watching = false
+        // Never leave a run or a recording going with no Stop button on screen.
+        stopAll("stopped")
         runCatching { wm.removeView(panel) }
         runCatching { wm.removeView(hud) }
     }
 
     /** Called around gesture dispatch so the injected touch reaches the app underneath, not us. */
     fun setTouchable(touchable: Boolean) {
-        val flag = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        panelParams.flags =
-            if (touchable) panelParams.flags and flag.inv() else panelParams.flags or flag
-        runCatching { wm.updateViewLayout(panel, panelParams) }
+        hud.blocked = !touchable
+        flag(panel, panelParams, touchable)
+        flag(hud, hudParams, touchable && (recording || recordingStops))
     }
 
-    private fun button(label: String, onClick: () -> Unit) = Button(svc).apply {
-        text = label
-        textSize = 11f
-        setOnClickListener { onClick() }
+    private fun flag(v: View, p: WindowManager.LayoutParams, touchable: Boolean) {
+        val f = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        p.flags = if (touchable) p.flags and f.inv() else p.flags or f
+        runCatching { wm.updateViewLayout(v, p) }
     }
+
+    private fun row(vararg views: View) = LinearLayout(svc).apply {
+        orientation = LinearLayout.HORIZONTAL
+        views.forEach { addView(it) }
+    }
+
+    private fun style(b: Button, label: String, onClick: () -> Unit) {
+        b.text = label
+        b.textSize = 11f
+        b.setOnClickListener { onClick() }
+    }
+
+    private fun button(label: String, onClick: () -> Unit) =
+        Button(svc).also { style(it, label, onClick) }
 
     private fun movePanel() {
         panelAtTop = !panelAtTop
@@ -135,136 +150,137 @@ class Overlay(private val svc: ShadowService) {
         wm.updateViewLayout(panel, panelParams)
     }
 
-    private fun startCrop() {
-        stopWatch()
-        readout.text = "cropping: capturing frame..."
-        svc.capture { frame ->
+    // ---- recording ----
+
+    private fun arm(stops: Boolean) {
+        // One capture loop at a time: concurrent takeScreenshot calls hit the rate limit and fail.
+        runner?.stop("stopped")
+        runner = null
+        recording = !stops
+        recordingStops = stops
+        hud.recordMode = true
+        hud.matchBox = null
+        if (macro.pkg == null) macro.pkg = svc.currentPackage()
+        setTouchable(true)
+        hud.invalidate()
+        recBtn.text = if (stops) "Rec" else "REC *"
+        noTapBtn.text = if (stops) "NOTAP *" else "No-Tap"
+        status(if (stops) "touch what must NEVER be tapped" else "use the app: every touch is a step")
+    }
+
+    private fun disarm() {
+        recording = false
+        recordingStops = false
+        hud.recordMode = false
+        setTouchable(true)
+        hud.invalidate()
+        recBtn.text = "Rec"
+        noTapBtn.text = "No-Tap"
+    }
+
+    private fun recorded(sx: Float, sy: Float, ex: Float, ey: Float, heldMs: Long) {
+        if (busy) {
+            status("too fast - wait for the step to save")
+            return
+        }
+        busy = true
+        val stop = recordingStops
+        val act = if (stop) Act.STOP else Macro.classify(ex - sx, ey - sy, heldMs)
+        // We ate the touch, so the app has not reacted yet: a frame taken now is the screen the
+        // user acted on, which is exactly the screen replay has to wait for.
+        svc.captureWhenAllowed { frame ->
             if (frame == null) {
-                readout.text = "capture failed"
-                return@capture
+                busy = false
+                status("capture failed")
+                return@captureWhenAllowed
             }
-            cropSource = frame
-            hud.cropMode = true
-            setHudTouchable(true)
-            readout.text = "drag a box around the thing to match"
+            val c = crop(frame, sx.toInt(), sy.toInt())
+            if (c == null) {
+                busy = false
+                status("that area is blank - touch something with detail")
+                return@captureWhenAllowed
+            }
+            val (bmp, box) = c
+            val name = (if (stop) "s" else "t") + System.currentTimeMillis() + ".png"
+            FileOutputStream(File(Macro.dir(svc), name)).use {
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+            val step = Step(
+                act = act, tx = box.left, ty = box.top,
+                x = sx.toInt(), y = sy.toInt(), x2 = ex.toInt(), y2 = ey.toInt(),
+                durationMs = heldMs.coerceIn(60L, 10_000L), template = name,
+                threshold = if (stop) Macro.STOP_THRESHOLD else Macro.STEP_THRESHOLD,
+            )
+            if (stop) macro.stops += step else macro.steps += step
+            Macro.save(svc, macro)
+            hud.matchBox = box
+            hud.invalidate()
+
+            if (stop) {
+                // A no-tap screen must never be touched, so this touch is not passed through.
+                busy = false
+                status("no-tap ${macro.stops.size} saved, touch NOT passed through")
+            } else {
+                svc.gesture(step, 0, 0) { ok ->
+                    busy = false
+                    status("step ${macro.steps.size}: $act" + if (ok) "" else " (not passed through!)")
+                }
+            }
         }
     }
 
-    private fun finishCrop(r: Rect) {
-        hud.cropMode = false
-        setHudTouchable(false)
-        val src = cropSource ?: return
-        val clipped = Rect(
-            r.left.coerceIn(0, src.width - 1), r.top.coerceIn(0, src.height - 1),
-            r.right.coerceIn(1, src.width), r.bottom.coerceIn(1, src.height)
-        )
-        if (clipped.width() < 8 || clipped.height() < 8) {
-            readout.text = "crop too small"
-            return
+    /** Flat crops false-match anything, so grow the box until it has some detail. */
+    private fun crop(frame: Bitmap, cx: Int, cy: Int): Pair<Bitmap, Rect>? {
+        for (half in CROP_HALF) {
+            val l = (cx - half).coerceIn(0, frame.width - 32)
+            val t = (cy - half).coerceIn(0, frame.height - 32)
+            val r = (cx + half).coerceIn(l + 32, frame.width)
+            val b = (cy + half).coerceIn(t + 32, frame.height)
+            val bmp = Bitmap.createBitmap(frame, l, t, r - l, b - t)
+            if (Matcher.stdDev(bmp) >= FLAT_STDDEV) return bmp to Rect(l, t, r, b)
         }
-        val t = Bitmap.createBitmap(src, clipped.left, clipped.top, clipped.width(), clipped.height())
-        template = t
-        FileOutputStream(File(svc.filesDir, TEMPLATE_FILE)).use {
-            t.compress(Bitmap.CompressFormat.PNG, 100, it)
+        return null
+    }
+
+    // ---- replay ----
+
+    private fun play() {
+        disarm()
+        runner?.stop("stopped")
+        if (macro.steps.isEmpty()) {
+            status("nothing recorded yet")
+            return
         }
         hud.matchBox = null
         hud.invalidate()
-        readout.text = "template ${clipped.width()}x${clipped.height()} at (${clipped.left},${clipped.top})"
+        runner = Runner(svc, macro) { s -> readout.text = s }.also { it.start() }
     }
 
-    private fun setHudTouchable(touchable: Boolean) {
-        val flag = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        hudParams.flags =
-            if (touchable) hudParams.flags and flag.inv() else hudParams.flags or flag
-        wm.updateViewLayout(hud, hudParams)
+    private fun stopAll(why: String) {
+        disarm()
+        runner?.stop(why)
+        runner = null
+        busy = false
+        status(why)
     }
 
-    private fun startWatch() {
-        if (template == null) {
-            readout.text = "crop a template first"
-            return
-        }
-        watching = true
-        watchBtn.text = "Stop"
-        main.post(tick)
-    }
-
-    private fun stopWatch() {
-        watching = false
-        watchBtn.text = "Watch"
-        main.removeCallbacks(tick)
-    }
-
-    // Matching runs on the main thread: ~40 ms every 380 ms. Move it off-thread when replay needs the headroom.
-    private val tick = object : Runnable {
-        override fun run() {
-            if (!watching) return
-            val t = template ?: return
-            // takeScreenshot captures our own windows too, so the match box we drew last tick would
-            // sit in this frame and drag the score down. Hide it, let the compositor catch up, shoot.
-            hud.visibility = View.INVISIBLE
-            main.postDelayed({ shoot(t) }, 40L)
-        }
-    }
-
-    private fun shoot(t: Bitmap) {
-        svc.capture { frame ->
-            hud.visibility = View.VISIBLE
-                if (frame == null) {
-                    readout.text = "capture failed"
-                } else {
-                    val m = Matcher.match(frame, t)
-                    last = m
-                    hud.matchBox = m?.let {
-                        Rect(
-                            it.cx - t.width / 2, it.cy - t.height / 2,
-                            it.cx + t.width / 2, it.cy + t.height / 2
-                        )
-                    }
-                    hud.invalidate()
-                    readout.text = if (m == null) "no result" else
-                        "score %.3f  at (%d,%d)  %dms  fg=%s".format(
-                            m.score, m.cx, m.cy, m.ms, svc.foregroundPackage ?: "?"
-                        )
-                }
-            if (watching) main.postDelayed(tick, ShadowService.CAPTURE_INTERVAL_MS)
-        }
-    }
-
-    private fun tapMatch() {
-        val m = last
-        if (m == null) {
-            readout.text = "nothing matched yet"
-            return
-        }
-        // Never tap a guess: the best location is still returned when nothing on screen matches.
-        if (m.score < TAP_THRESHOLD) {
-            readout.text = "score %.3f below %.2f - not tapping".format(m.score, TAP_THRESHOLD)
-            return
-        }
-        readout.text = "tapping (${m.cx},${m.cy})..."
-        svc.tap(m.cx.toFloat(), m.cy.toFloat()) { ok ->
-            readout.text = "tap at (${m.cx},${m.cy}) ${if (ok) "done" else "FAILED"}"
-        }
-    }
-
-    private fun saveFrame() {
-        val f = svc.latestFrame
-        if (f == null) {
-            readout.text = "no frame yet"
-            return
-        }
-        val out = File(svc.filesDir, "frame.png")
-        FileOutputStream(out).use { f.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        readout.text = "saved ${f.width}x${f.height} -> ${out.name}"
+    private fun clear() {
+        stopAll("stopped")
+        Macro.dir(svc).listFiles()?.forEach { it.delete() }
+        macro = Macro()
+        hud.matchBox = null
+        hud.invalidate()
+        status("cleared")
     }
 
     private fun selfTest() {
         val f = svc.latestFrame
-        if (f == null) {
-            readout.text = "no frame yet (use Crop or Watch once)"
-            return
-        }
-        readout.text = Matcher.selfTest(f)
+        readout.text = Macro.selfTest() + "\n" +
+            if (f == null) "(no frame yet - Rec or Play once)" else Matcher.selfTest(f)
+    }
+
+    private fun status(extra: String? = null) {
+        val base = "${macro.steps.size} steps, ${macro.stops.size} no-tap, app=${macro.pkg ?: "?"}"
+        readout.text = if (extra == null) base else "$extra\n$base"
     }
 }

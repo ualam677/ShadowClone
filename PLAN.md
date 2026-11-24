@@ -143,3 +143,37 @@ Verified on device, driven over wireless adb:
 
 - Tap refuses to fire below a 0.8 score, so a junk best-match cannot be tapped. That is the same
   "never guess" rule M2's replay needs.
+
+## M2 results (24 Nov 2026, on the OnePlus 13)
+
+Record and replay work end to end. Verified by driving the phone over adb:
+- **Record.** Armed with Rec, an injected tap at (947,1142) was eaten by the HUD, classified `TAP`,
+  cropped to a 200x200 template at (847,1042), written to `files/macros/default/macro.json`, and then
+  re-dispatched — YouTube actually opened. So eat-and-re-dispatch works through a real window.
+- **Replay.** From the home screen, Play matched the template, shifted the gesture to where it
+  matched, tapped, and reported `done: 1 steps`; YouTube opened again.
+- **Self-test.** `macro self-test PASS` on device: gesture classification, the JSON round trip and
+  the search-region maths.
+
+### Changed from the M1 plan
+- **Templates are captured after touch-up, not from a rolling frame.** The overlay eats the touch,
+  so the app has not reacted yet and a frame taken then *is* the screen the user acted on. A rolling
+  frame could still show the previous step's screen, which would make the next step match too early.
+  `captureWhenAllowed` waits out the ~333 ms screenshot rate limit instead.
+- **`canRetrieveWindowContent` is now true.** Window-state events are not enough: returning to the
+  OnePlus launcher fires none, so `foregroundPackage` went stale and replay sat paused for ever
+  (seen on device). The service now reads `rootInActiveWindow` each tick. Our own package, the
+  shade, the IME and `com.oplus.games` are ignored so they cannot pause a run.
+- **Stop rules are recorded, not written by hand.** "No-Tap" arms the same recorder; the touch is
+  cropped and stored with threshold 0.7, and is deliberately **not** re-dispatched, so recording a
+  purchase screen never buys anything.
+- **M1's Crop / Watch / Tap / Frame buttons are gone** — the recorder replaces them.
+
+### Known, not fixed
+- **No-tap stop rules are not verified on device yet.** The code path is written and the touch was
+  correctly not passed through, but the rule did not get saved in the one attempt made before the
+  phone was back in use. Needs a rerun.
+- Swipe replay is untested; only a tap has been round-tripped.
+- One macro slot only (`macros/default`). Loops, the step editor and watchers are M3.
+- `busy` refuses a second touch while a step is being saved (~400 ms), so fast tapping drops
+  touches rather than recording them out of order.
