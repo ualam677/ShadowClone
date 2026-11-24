@@ -170,14 +170,22 @@ Record and replay work end to end. Verified by driving the phone over adb:
 - **M1's Crop / Watch / Tap / Frame buttons are gone** — the recorder replaces them.
 
 ### Known, not fixed
-- **No-tap stop rules are not verified on device.** The one attempt saved no rule, and Gmail did
-  not open either -- which fits the touch being eaten and the save failing, but equally fits the
-  touch never reaching the overlay. Unknown until it is rerun; `recorded()` now logs every exit to
-  logcat under `ShadowClone` so the next attempt is diagnosable.
-- **The foreground pause is still unproven.** The replay that passed ran right after a reinstall,
-  when the package was null, and null used to skip the check. Null now pauses, so the real test is:
-  open another app, press Play (must say paused), press HOME, it must resume.
-- Swipe replay is untested; only a tap has been round-tripped.
 - One macro slot only (`macros/default`). Loops, the step editor and watchers are M3.
 - `busy` refuses a second touch while a step is being saved (~400 ms), so fast tapping drops
   touches rather than recording them out of order.
+- **The service process gets killed.** Seen on device: the whole process was gone, so the overlay
+  vanished and had to be brought back by opening the app. Set the app's battery usage to
+  **Unrestricted** in OxygenOS before any long run.
+- MainActivity draws its first two rows under the action bar. Cosmetic; the buttons still work.
+- Swipe and long-press replay are untested; only a tap has been round-tripped.
+
+### Safety verified on device (24 Nov 2026)
+Driven over adb on the home screen, never in a game:
+- **A no-tap rule records without acting.** Armed with No-Tap, a touch on the Gmail icon was eaten,
+  stored as a `STOP` trigger at threshold 0.7 -- and Gmail did not open.
+- **A stop rule halts a run and overrides steps.** With one step (tap YouTube) and that no-tap rule,
+  Play matched the no-tap screen at **0.996** and reported `stopped by a no-tap rule`. The step never
+  fired: the launcher was still in front afterwards.
+- **Foreground pause and resume work.** With the macro pinned to `com.android.launcher`, pressing
+  Play inside YouTube gave `paused: app.revanced.android.youtube in front, want com.android.launcher`.
+  Pressing HOME resumed it on its own, the step fired, and it finished `done: 1 steps`.
