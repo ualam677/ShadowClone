@@ -189,3 +189,50 @@ Driven over adb on the home screen, never in a game:
 - **Foreground pause and resume work.** With the macro pinned to `com.android.launcher`, pressing
   Play inside YouTube gave `paused: app.revanced.android.youtube in front, want com.android.launcher`.
   Pressing HOME resumed it on its own, the step fired, and it finished `done: 1 steps`.
+
+## M3 results (24 Nov 2026, on the OnePlus 13)
+
+Editor, watchers and loops are in and verified in Settings over adb.
+
+Panel is now `Rec | No-Tap | Watch` / `Play | Stop | Score` / `Clear | Move | Hide`. Play doubles as
+Pause and Resume while a run is going, and the readout carries `step 2/5  loop 3/10`.
+
+- **Loops.** `loops` on the macro: 1 once, N times, 0 until stopped or a no-tap rule fires. A
+  two-step Settings loop at `loops=2` reported `done: 2 steps x 2` and left the screen where it
+  started. The second step's template was the top-left back arrow, so edge-clipped crops replay fine.
+- **Watchers.** A third list beside steps and no-tap rules, evaluated every frame. Verified out of
+  order: with step 1 opening Bluetooth and step 2 needing the Settings root, the back-arrow watcher
+  matched at 0.940, tapped, and step 2 then ran -- readout `watcher 0.940 TAP  step 2/2 loop 1/1`,
+  then `done`. A fired watcher does not reset the step clock, so a popup that will not dismiss still
+  ends on the step timeout instead of looping for ever; each watcher has a 2 s cooldown.
+- **Editor.** `MainActivity` is now the editor: repeat count, and every step, watcher and no-tap rule
+  as a row. A row opens a dialog with the template thumbnail, the recorded coordinates, and
+  threshold / timeout / delay / search padding, plus Up, Down, Re-record and Delete. Setting step 1's
+  delay to 2500 ms visibly held the run on the Bluetooth screen, so edits reach the runner.
+- **Score.** Scores every trigger against the screen as it is now, through the same code replay uses.
+  On the Bluetooth screen: `S1 0.576/0.85 -`, `S2 0.576/0.85 -`, `W1 0.940/0.85 HIT`.
+- **Swipe replay, the M2 gap.** A recorded scroll (540,1600)->(540,1000) over 307 ms replayed and
+  scrolled the list; the screen differed from the un-scrolled one by 41 grey levels per pixel against
+  a 2.7 baseline for the same screen twice.
+- **Typed numbers are clamped** (`Step.clamp`): steps at least 0.6, no-tap rules at most 0.9, timeout
+  at least 1 s. The self-test covers the clamps, loops, watchers and reading older macro files.
+
+### Fixed during M3
+- **One package per macro was wrong.** OnePlus Settings opens its Bluetooth screen as
+  `com.oplus.wirelesssettings`, so a run paused in the middle of its own flow. A macro now stores the
+  set of packages seen while recording, and pauses only when the foreground is none of them.
+- **The macro was held in two places.** The editor and the recorder each loaded their own copy, so
+  whichever saved last wiped the other's changes. `Macro.current()` is now the one instance.
+- **The panel sat on top of the editor.** Hiding it in the editor was not enough: the service can be
+  re-bound at any moment and rebuilt the panel seconds later. `MainActivity.editorOpen` now gates
+  overlay creation. Leaving the editor is also how to get the panel back after Hide.
+- MainActivity drew under the action bar. It is NoActionBar now, padded from the window insets.
+
+### Known, not fixed
+- A step records the package of the screen it starts on, not the one it leads to. That is only a
+  problem for the very last step of a macro, since the next step records the new screen anyway.
+- Two steps whose templates live on the same screen can run back to back before the app has
+  navigated: the post-step delay is the only guard. Raise that step's delay in the editor.
+- Re-record sends you out of the editor and waits for the next Rec touch; there is no visible
+  reminder other than the panel's readout.
+- One macro slot. Multiple macros, run logs and export/import are M4.

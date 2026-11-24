@@ -1,28 +1,40 @@
 package com.shadowclone
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
-import java.io.File
 
 /**
- * Replays a macro. Per frame: stop rules first, then foreground check, then the current step.
- * Never dispatches below the step threshold, and gives up rather than guessing after the timeout.
+ * Replays a macro. Per frame, in this order: no-tap rules, the foreground check, watchers, then the
+ * current step. Nothing is dispatched below its threshold, and a step that never shows up gives up
+ * after its timeout rather than guessing.
+ *
+ * The foreground check sits above watchers on purpose: a watcher dispatches a real gesture, so
+ * letting it run while another app is in front would tap inside that app.
  */
 class Runner(
     private val svc: ShadowService,
     private val macro: Macro,
     private val onState: (String) -> Unit,
 ) {
+    private companion object {
+        /** A popup that lingers would otherwise be tapped on every frame. */
+        const val WATCHER_COOLDOWN_MS = 2_000L
+    }
+
     private val main = Handler(Looper.getMainLooper())
-    private val cache = HashMap<String, Bitmap>()
+    private val watcherFiredAt = HashMap<String, Long>()
+
     private var i = 0
+    private var loop = 1
     private var stepStart = 0L
+    private var heldFor = 0L
     private var running = false
+    private var paused = false
 
     val active get() = running
+    val isPaused get() = paused
 
     fun start() {
         if (macro.steps.isEmpty()) {
@@ -30,14 +42,33 @@ class Runner(
             return
         }
         i = 0
+        loop = 1
         running = true
+        paused = false
         stepStart = System.currentTimeMillis()
+        main.post(tick)
+    }
+
+    /** Holds the step clock, so resuming does not immediately time the step out. */
+    fun pause() {
+        if (!running || paused) return
+        paused = true
+        heldFor = System.currentTimeMillis() - stepStart
+        main.removeCallbacks(tick)
+        onState("paused by you  ${where()}")
+    }
+
+    fun resume() {
+        if (!running || !paused) return
+        paused = false
+        stepStart = System.currentTimeMillis() - heldFor
         main.post(tick)
     }
 
     fun stop(why: String) {
         if (!running) return
         running = false
+        paused = false
         main.removeCallbacks(tick)
         onState(why)
     }
@@ -47,22 +78,32 @@ class Runner(
         Toast.makeText(svc, "ShadowClone: $why", Toast.LENGTH_LONG).show()
     }
 
+    private fun where(): String {
+        val of = if (macro.loops == 0) "$loop" else "$loop/${macro.loops}"
+        return "step ${i + 1}/${macro.steps.size}  loop $of"
+    }
+
     private val tick = Runnable {
-        if (running) svc.capture { frame -> if (running) onFrame(frame) }
+        if (running && !paused) svc.capture { frame -> if (running && !paused) onFrame(frame) }
     }
 
     private fun again() {
-        if (running) main.postDelayed(tick, ShadowService.CAPTURE_INTERVAL_MS)
+        if (running && !paused) main.postDelayed(tick, ShadowService.CAPTURE_INTERVAL_MS)
     }
 
     private fun onFrame(frame: Bitmap?) {
         if (frame == null) {
             again(); return
         }
+        if (i >= macro.steps.size) {
+            // The step list was edited out from under us.
+            stop("macro changed while running")
+            return
+        }
 
-        // Stop rules win over the step we are waiting for, and never dispatch anything.
+        // No-tap rules win over everything, and never dispatch anything.
         for (s in macro.stops) {
-            val m = matchOf(frame, s) ?: continue
+            val m = Templates.match(svc, frame, s) ?: continue
             if (m.score >= s.threshold) {
                 halt("stopped by a no-tap rule (%.3f)".format(m.score))
                 return
@@ -70,21 +111,42 @@ class Runner(
         }
 
         val fg = svc.currentPackage()
-        val want = macro.pkg
+        val want = macro.pkgs
         // A null reading pauses too: a lookup that quietly fails must not disable the guard.
-        if (want != null && fg != want) {
-            // Paused, not failed: hold the clock, or coming back would time the step out at once.
+        if (want.isNotEmpty() && fg !in want) {
+            // Hold the clock, or coming back would time the step out at once.
             stepStart = System.currentTimeMillis()
-            onState("paused: $fg in front, want $want")
+            onState("paused: ${fg ?: "unknown"} in front, not one of the ${want.size} recorded")
             again(); return
         }
 
+        // Watchers fire whatever step we are on. The step clock keeps running, so a popup that
+        // will not dismiss still ends the run on the step timeout instead of looping for ever.
+        val now = System.currentTimeMillis()
+        for (w in macro.watchers) {
+            if (now - (watcherFiredAt[w.template] ?: 0L) < WATCHER_COOLDOWN_MS) continue
+            val m = Templates.match(svc, frame, w) ?: continue
+            if (m.score < w.threshold) continue
+            watcherFiredAt[w.template] = now
+            onState("watcher %.3f  %s  %s".format(m.score, w.act, where()))
+            dispatch(w, m) { ok ->
+                if (!running) return@dispatch
+                if (!ok) return@dispatch halt("the system rejected a watcher gesture")
+                main.postDelayed(tick, w.postDelayMs)
+            }
+            return
+        }
+
         val step = macro.steps[i]
-        val m = matchOf(frame, step)
+        val m = Templates.match(svc, frame, step)
         val score = m?.score ?: 0.0
         if (m != null && score >= step.threshold) {
-            onState("step %d/%d  %.3f  %s".format(i + 1, macro.steps.size, score, step.act))
-            fire(step, m)
+            onState("%s  %.3f  %s".format(where(), score, step.act))
+            dispatch(step, m) { ok ->
+                if (!running) return@dispatch
+                if (!ok) return@dispatch halt("the system rejected the gesture on step ${i + 1}")
+                advance(step)
+            }
             return
         }
 
@@ -93,38 +155,30 @@ class Runner(
             halt("timed out on step %d after %ds (best %.3f)".format(i + 1, waited / 1000, score))
             return
         }
-        onState("step %d/%d waiting  %.3f  %ds".format(i + 1, macro.steps.size, score, waited / 1000))
+        onState("%s waiting  %.3f  %ds".format(where(), score, waited / 1000))
         again()
     }
 
-    private fun fire(step: Step, m: MatchResult) {
-        val t = bmp(step.template) ?: return halt("template ${step.template} is missing")
-        // The match gives the template's centre; shift the whole gesture by where it moved to.
-        val dx = (m.cx - t.width / 2) - step.tx
-        val dy = (m.cy - t.height / 2) - step.ty
-        svc.gesture(step, dx, dy) { ok ->
-            if (!running) return@gesture
-            if (!ok) return@gesture halt("the system rejected the gesture on step ${i + 1}")
-            i++
-            if (i >= macro.steps.size) {
-                running = false
-                onState("done: ${macro.steps.size} steps")
-                return@gesture
-            }
+    private fun advance(step: Step) {
+        i++
+        if (i < macro.steps.size) {
             stepStart = System.currentTimeMillis()
             main.postDelayed(tick, step.postDelayMs)
+            return
         }
+        if (macro.loops != 0 && loop >= macro.loops) {
+            running = false
+            onState("done: ${macro.steps.size} steps x $loop")
+            return
+        }
+        loop++
+        i = 0
+        stepStart = System.currentTimeMillis()
+        main.postDelayed(tick, step.postDelayMs)
     }
 
-    private fun matchOf(frame: Bitmap, s: Step): MatchResult? {
-        val t = bmp(s.template) ?: return null
-        return Matcher.match(frame, t, s.region(t.width, t.height, frame.width, frame.height))
-    }
-
-    private fun bmp(name: String): Bitmap? {
-        cache[name]?.let { return it }
-        val b = BitmapFactory.decodeFile(File(Macro.dir(svc), name).path) ?: return null
-        cache[name] = b
-        return b
+    private fun dispatch(s: Step, m: MatchResult, done: (Boolean) -> Unit) {
+        val off = Templates.offset(svc, s, m) ?: return halt("template ${s.template} is missing")
+        svc.gesture(s, off.first, off.second, done)
     }
 }

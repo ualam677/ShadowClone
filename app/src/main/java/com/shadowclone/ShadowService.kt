@@ -60,7 +60,7 @@ class ShadowService : AccessibilityService() {
         Log.i(TAG, "connected ${System.identityHashCode(this)}")
         // onServiceConnected can fire again on an already running service; a second Overlay would
         // stack an empty panel on top of the live one and lose its state.
-        if (overlay == null) overlay = Overlay(this).also { it.show() }
+        setOverlayVisible(true)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
@@ -82,11 +82,17 @@ class ShadowService : AccessibilityService() {
 
     /** The panel sits over the gesture-nav area, so there has to be a way to get it out of the way. */
     fun toggleOverlay(): Boolean {
-        val ov = overlay
-        return if (ov != null) {
-            ov.hide(); overlay = null; false
-        } else {
-            overlay = Overlay(this).also { it.show() }; true
+        val wanted = overlay == null
+        setOverlayVisible(wanted)
+        return wanted
+    }
+
+    fun setOverlayVisible(visible: Boolean) {
+        if (visible && overlay == null && !MainActivity.editorOpen) {
+            overlay = Overlay(this).also { it.show() }
+        } else if (!visible) {
+            overlay?.hide()
+            overlay = null
         }
     }
 
