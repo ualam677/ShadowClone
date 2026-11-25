@@ -80,6 +80,17 @@ timeout / delay, and an ordered list of macros. The Naruto Blazing bot becomes
 - Android 13+ greys out the accessibility toggle for sideloaded APKs. I install with `adb install`,
   which avoids it; if you ever install by tapping the file, use App info -> ... -> Allow restricted settings.
 - Set the app's battery usage to **Unrestricted** in OxygenOS or the service gets killed.
+- **`adb install -r` leaves the service enabled but unbound.** Verified 25 Nov 2026: after a
+  reinstall the process was alive and `settings get secure enabled_accessibility_services` still
+  listed us, but `onServiceConnected` never fired, so there was no panel and nothing worked. It is
+  not a permission loss, so the Settings toggle still reads as on. Rebind it from the shell by
+  writing the setting without us and then back:
+  ```
+  adb -s $D shell "settings put secure enabled_accessibility_services '<others>'"
+  adb -s $D shell "settings put secure enabled_accessibility_services '<others>:com.shadowclone/com.shadowclone.ShadowService'"
+  ```
+  Read the original value first and write it back verbatim — other accessibility services share
+  that setting. Confirm with `adb logcat -d -s Bunshin`, which should show `connected`.
 
 ## Deferred on purpose
 OCR (reading coin counters, `MAP n/20`), tap randomisation, Mode B battle logic, multi-device
