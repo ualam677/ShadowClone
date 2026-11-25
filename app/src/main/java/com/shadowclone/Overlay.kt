@@ -32,12 +32,9 @@ class Overlay(private val svc: ShadowService) {
     private val main = Handler(Looper.getMainLooper())
 
     private val hud = HudView(svc)
-    private val readout = TextView(svc)
-    private val panel = LinearLayout(svc)
-    private val recBtn = Button(svc)
-    private val noTapBtn = Button(svc)
-    private val watchBtn = Button(svc)
-    private val playBtn = Button(svc)
+    private val dock = Dock(svc) { key -> onKey(key) }
+    private val prefs =
+        svc.getSharedPreferences("overlay", android.content.Context.MODE_PRIVATE)
 
     /** Always the process-wide macro: the editor mutates the same object. */
     private val macro get() = Macro.current(svc)
@@ -47,7 +44,6 @@ class Overlay(private val svc: ShadowService) {
     /** Set from touch-up until the step is saved and re-dispatched; further touches are refused
      *  rather than passed through, or the recording would drift from what the app actually got. */
     private var busy = false
-    private var panelAtTop = false
 
     private val hudParams = WindowManager.LayoutParams(
         WindowManager.LayoutParams.MATCH_PARENT,
@@ -72,59 +68,76 @@ class Overlay(private val svc: ShadowService) {
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
         PixelFormat.TRANSLUCENT
     ).apply {
-        gravity = Gravity.BOTTOM or Gravity.START
+        // TOP|START plus x/y, so the dock can be dropped anywhere instead of toggled
+        // between two corners.
+        gravity = Gravity.TOP or Gravity.START
         layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
     }
 
     fun show() {
-        readout.setBackgroundColor(0xCC000000.toInt())
-        readout.setTextColor(0xFFFFFFFF.toInt())
-        readout.textSize = 11f
-        readout.setPadding(12, 8, 12, 8)
+        panelParams.x = prefs.getInt("x", 0)
+        panelParams.y = prefs.getInt("y", 0)
 
-        panel.orientation = LinearLayout.VERTICAL
-        panel.setBackgroundColor(0x99000000.toInt())
-        panel.addView(readout)
-
-        // Three per row: six buttons in one row overflow 1080 px and the last ones fall off screen.
-        panel.addView(
-            row(
-                recBtn.also { style(it, "Rec") { arm(Kind.STEP) } },
-                noTapBtn.also { style(it, "No-Tap") { arm(Kind.STOP) } },
-                watchBtn.also { style(it, "Watch") { arm(Kind.WATCH) } },
-            )
-        )
-        panel.addView(
-            row(
-                playBtn.also { style(it, "Play") { playPause() } },
-                button("Stop") { stopAll("stopped") },
-                button("Score") { score() },
-            )
-        )
-        panel.addView(
-            row(
-                button("Clear") { clear() },
-                button("Move") { movePanel() },
-                button("Hide") {
-                    // Hide is the user asking for the panel to go. A run with no panel has no
-                    // Stop, so it ends here rather than carrying on invisibly.
-                    svc.stopRun("stopped")
-                    main.post { svc.toggleOverlay() }
-                },
-            )
-        )
-
-        // The run belongs to the service; the panel is one view onto it.
+        // The run belongs to the service; the dock is one view onto it.
         svc.onRunText = { s ->
-            readout.text = s
+            dock.say(s)
             labels()
         }
         svc.onRun = { }
 
         hud.onGesture = { sx, sy, ex, ey, held -> recorded(sx, sy, ex, ey, held) }
         wm.addView(hud, hudParams)
-        wm.addView(panel, panelParams)
+        wm.addView(dock.view, panelParams)
+        dock.onDrag(
+            onMove = { dx, dy -> moveBy(dx, dy) },
+            onDrop = {
+                prefs.edit().putInt("x", panelParams.x).putInt("y", panelParams.y).apply()
+            },
+        )
+        // First show: park it at the bottom-left, clear of the gesture area.
+        if (!prefs.contains("x")) dock.view.post { moveBy(0f, Float.MAX_VALUE) }
         status()
+        labels()
+    }
+
+    /** One key press from the dock. */
+    private fun onKey(key: Key) {
+        // Logged because a Clear once had no effect and there was no way to tell whether the
+        // touch reached the button at all.
+        Log.i(ShadowService.TAG, "panel $key")
+        when (key) {
+            Key.REC -> arm(Kind.STEP)
+            Key.NO_TAP -> arm(Kind.STOP)
+            Key.WATCH -> arm(Kind.WATCH)
+            Key.PLAY -> playPause()
+            Key.STOP -> stopAll("stopped")
+            Key.MORE -> dock.toggleSheet()
+            Key.SCORE -> { dock.closeSheet(); score() }
+            Key.CLEAR -> { dock.closeSheet(); clear() }
+            Key.HIDE -> {
+                // Hide is the user asking for the panel to go. A run with no panel has no
+                // Stop, so it ends here rather than carrying on invisibly.
+                svc.stopRun("stopped")
+                main.post { svc.toggleOverlay() }
+            }
+        }
+    }
+
+    /**
+     * Moves the dock, clamped so no part of it can leave the display. Stop lives on this bar, and
+     * a dock dragged half off screen would be a Stop that cannot be pressed.
+     */
+    private fun moveBy(dx: Float, dy: Float) {
+        val bounds = wm.currentWindowMetrics.bounds
+        val insets = wm.currentWindowMetrics.windowInsets
+            .getInsets(android.view.WindowInsets.Type.systemBars())
+        val w = dock.view.width.takeIf { it > 0 } ?: dock.width
+        val h = dock.view.height.takeIf { it > 0 } ?: 0
+        panelParams.x = (panelParams.x + dx).toInt()
+            .coerceIn(0, (bounds.width() - w).coerceAtLeast(0))
+        panelParams.y = (panelParams.y + dy).toInt()
+            .coerceIn(insets.top, (bounds.height() - h - insets.bottom).coerceAtLeast(insets.top))
+        runCatching { wm.updateViewLayout(dock.view, panelParams) }
     }
 
     /**
@@ -137,14 +150,14 @@ class Overlay(private val svc: ShadowService) {
         busy = false
         svc.onRunText = null
         svc.onRun = null
-        runCatching { wm.removeView(panel) }
+        runCatching { wm.removeView(dock.view) }
         runCatching { wm.removeView(hud) }
     }
 
     /** Called around gesture dispatch so the injected touch reaches the app underneath, not us. */
     fun setTouchable(touchable: Boolean) {
         hud.blocked = !touchable
-        flag(panel, panelParams, touchable)
+        flag(dock.view, panelParams, touchable)
         flag(hud, hudParams, touchable && armed != null)
     }
 
@@ -152,31 +165,6 @@ class Overlay(private val svc: ShadowService) {
         val f = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         p.flags = if (touchable) p.flags and f.inv() else p.flags or f
         runCatching { wm.updateViewLayout(v, p) }
-    }
-
-    private fun row(vararg views: View) = LinearLayout(svc).apply {
-        orientation = LinearLayout.HORIZONTAL
-        views.forEach { addView(it) }
-    }
-
-    private fun style(b: Button, label: String, onClick: () -> Unit) {
-        b.text = label
-        b.textSize = 11f
-        // Logged because a Clear once had no effect and there was no way to tell whether the
-        // touch reached the button at all.
-        b.setOnClickListener {
-            Log.i(ShadowService.TAG, "panel ${b.text}")
-            onClick()
-        }
-    }
-
-    private fun button(label: String, onClick: () -> Unit) =
-        Button(svc).also { style(it, label, onClick) }
-
-    private fun movePanel() {
-        panelAtTop = !panelAtTop
-        panelParams.gravity = (if (panelAtTop) Gravity.TOP else Gravity.BOTTOM) or Gravity.START
-        wm.updateViewLayout(panel, panelParams)
     }
 
     // ---- recording ----
@@ -215,14 +203,15 @@ class Overlay(private val svc: ShadowService) {
     }
 
     private fun labels() {
-        recBtn.text = if (armed == Kind.STEP) "REC *" else "Rec"
-        noTapBtn.text = if (armed == Kind.STOP) "NOTAP *" else "No-Tap"
-        watchBtn.text = if (armed == Kind.WATCH) "WATCH *" else "Watch"
-        playBtn.text = when {
-            !svc.runActive -> "Play"
-            svc.runPaused -> "Resume"
-            else -> "Pause"
-        }
+        dock.setArmed(armed)
+        dock.setRunning(svc.runActive)
+        dock.setPlayLabel(
+            when {
+                !svc.runActive -> "Play"
+                svc.runPaused -> "Resume"
+                else -> "Pause"
+            }
+        )
     }
 
     private fun recorded(sx: Float, sy: Float, ex: Float, ey: Float, heldMs: Long) {
@@ -376,7 +365,7 @@ class Overlay(private val svc: ShadowService) {
         hud.showMarks = false
         hud.matchBox = null
         hud.invalidate()
-        readout.text = "scoring..."
+        dock.say("scoring...")
         main.postDelayed({
             svc.captureWhenAllowed { frame ->
                 hud.showMarks = true
@@ -395,7 +384,7 @@ class Overlay(private val svc: ShadowService) {
                         )
                     }
                 }
-                readout.text = lines.take(12).joinToString("\n")
+                dock.say(lines.take(12).joinToString("\n"))
             }
         }, 40L)
     }
@@ -411,8 +400,10 @@ class Overlay(private val svc: ShadowService) {
 
     private fun status(extra: String? = null) {
         val loops = if (macro.loops == 0) "until stopped" else "x${macro.loops}"
-        val base = "${macro.steps.size} steps, ${macro.watchers.size} watch, " +
-            "${macro.stops.size} no-tap, $loops, app=${apps()}"
-        readout.text = if (extra == null) base else "$extra\n$base"
+        dock.setSummary(
+            "${macro.steps.size} steps \u00b7 ${macro.watchers.size} watch \u00b7 " +
+                "${macro.stops.size} no-tap \u00b7 $loops \u00b7 ${apps()}"
+        )
+        if (extra != null) dock.say(extra)
     }
 }

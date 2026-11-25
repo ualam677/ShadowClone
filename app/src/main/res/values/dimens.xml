@@ -32,4 +32,11 @@
     <dimen name="text_title">20sp</dimen>
     <dimen name="text_row">15sp</dimen>
     <dimen name="text_secondary">13sp</dimen>
+
+    <!-- the dock. Keys are 52dp tall (above the 48dp minimum) and 56dp wide so "No-Tap"
+         fits at the secondary type size without a fourth size being invented. -->
+    <dimen name="dock_key_h">52dp</dimen>
+    <dimen name="dock_key_w">56dp</dimen>
+    <dimen name="dock_grip_w">20dp</dimen>
+    <dimen name="dock_glyph">17sp</dimen>
 </resources>
