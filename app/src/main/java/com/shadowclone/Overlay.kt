@@ -94,6 +94,16 @@ class Overlay(private val svc: ShadowService) {
                 prefs.edit().putInt("x", panelParams.x).putInt("y", panelParams.y).apply()
             },
         )
+        // The strip and the More sheet make the dock taller. The window's top stays where it
+        // is, so without re-clamping the key row -- Stop included -- slides off the bottom.
+        var lastHeight = 0
+        dock.view.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            val h = bottom - top
+            if (h != lastHeight) {
+                lastHeight = h
+                moveBy(0f, 0f)
+            }
+        }
         // First show: park it at the bottom-left, clear of the gesture area.
         if (!prefs.contains("x")) dock.view.post { moveBy(0f, Float.MAX_VALUE) }
         status()
@@ -131,7 +141,7 @@ class Overlay(private val svc: ShadowService) {
         val bounds = wm.currentWindowMetrics.bounds
         val insets = wm.currentWindowMetrics.windowInsets
             .getInsets(android.view.WindowInsets.Type.systemBars())
-        val w = dock.view.width.takeIf { it > 0 } ?: dock.width
+        val w = dock.view.width.takeIf { it > 0 } ?: dock.dockWidth
         val h = dock.view.height.takeIf { it > 0 } ?: 0
         panelParams.x = (panelParams.x + dx).toInt()
             .coerceIn(0, (bounds.width() - w).coerceAtLeast(0))

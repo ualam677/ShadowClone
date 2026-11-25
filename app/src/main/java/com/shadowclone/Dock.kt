@@ -42,8 +42,13 @@ class Dock(svc: ShadowService, private val onKey: (Key) -> Unit) {
     private val keyH = px(R.dimen.dock_key_h)
     private val gripW = px(R.dimen.dock_grip_w)
 
-    /** Fixed, so nothing the strip or the sheet says can resize the dock. */
-    val width = gutter * 2 + gripW + 5 * keyW + 5 * gap
+    /**
+     * Fixed, so nothing the strip or the sheet says can resize the dock.
+     *
+     * Not named `width`: inside an `apply` on a View that would resolve to View.width, which is
+     * 0 at construction, and the window silently comes out zero pixels wide.
+     */
+    val dockWidth = gutter * 2 + gripW + 5 * keyW + 5 * gap
 
     private val keys = HashMap<Key, LinearLayout>()
     private val glyphs = HashMap<Key, TextView>()
@@ -72,10 +77,16 @@ class Dock(svc: ShadowService, private val onKey: (Key) -> Unit) {
     }
 
     private val grip = View(ctx).apply {
-        background = GradientDrawable().apply {
+        // The view is a comfortable touch target; the visible bar is inset inside it, or the
+        // grip reads as a sixth, blank key.
+        val bar = GradientDrawable().apply {
             cornerRadius = px(R.dimen.space_4).toFloat() / 2
             setColor(colour(R.color.line))
         }
+        val side = (px(R.dimen.dock_grip_w) - px(R.dimen.space_4)) / 2
+        background = android.graphics.drawable.InsetDrawable(
+            bar, side, px(R.dimen.space_12), side, px(R.dimen.space_12)
+        )
     }
 
     private val row = LinearLayout(ctx).apply {
@@ -88,11 +99,11 @@ class Dock(svc: ShadowService, private val onKey: (Key) -> Unit) {
     /** The whole dock: strip, sheet, keys. */
     val view: LinearLayout = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
-        addView(strip, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT)
+        addView(strip, LinearLayout.LayoutParams(dockWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
             .apply { bottomMargin = gap })
-        addView(sheet, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT)
+        addView(sheet, LinearLayout.LayoutParams(dockWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
             .apply { bottomMargin = gap })
-        addView(row, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(row, LinearLayout.LayoutParams(dockWidth, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
     /** Where the dock is on screen, for the crop-overlap warning. */
@@ -104,7 +115,7 @@ class Dock(svc: ShadowService, private val onKey: (Key) -> Unit) {
         }
 
     init {
-        row.addView(grip, LinearLayout.LayoutParams(px(R.dimen.space_4), px(R.dimen.space_24))
+        row.addView(grip, LinearLayout.LayoutParams(gripW, keyH)
             .apply { marginEnd = gap; gravity = Gravity.CENTER_VERTICAL })
         key(Key.REC, "●", "Rec", R.color.rec)
         key(Key.NO_TAP, "⊘", "No-Tap", R.color.no_tap)
@@ -260,17 +271,7 @@ class Dock(svc: ShadowService, private val onKey: (Key) -> Unit) {
                 else -> false
             }
         }
-        // The grip is 4dp of line; widen its reach so it is not a precision target.
-        grip.post {
-            val pad = px(R.dimen.space_8)
-            (grip.parent as? View)?.touchDelegate = null
-            grip.layoutParams = (grip.layoutParams as LinearLayout.LayoutParams).apply {
-                width = gripW
-                marginEnd = gap
-            }
-            grip.setPadding(pad, 0, pad, 0)
-            grip.requestLayout()
-        }
+
     }
 
     private companion object {
