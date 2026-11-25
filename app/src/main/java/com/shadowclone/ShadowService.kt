@@ -43,6 +43,59 @@ class ShadowService : AccessibilityService() {
     private val main = Handler(Looper.getMainLooper())
     private var overlay: Overlay? = null
 
+    // ---- the run ----
+    //
+    // The service owns the runner, not the overlay. The overlay is torn down whenever the editor
+    // opens, and a run that died with it could never be shown on the macro screen, nor survive
+    // the hand-off the Run button makes.
+
+    private var runner: Runner? = null
+
+    val runActive get() = runner?.active == true
+    val runPaused get() = runner?.isPaused == true
+
+    /** The readout string. Whichever surface is on screen subscribes; both may be absent. */
+    @Volatile
+    var onRunText: ((String) -> Unit)? = null
+
+    /** The same progress as values, for the status pill. */
+    @Volatile
+    var onRun: ((RunState) -> Unit)? = null
+
+    /** False when there was nothing to run. */
+    fun startRun(): Boolean {
+        val macro = Macro.current(this)
+        if (macro.steps.isEmpty()) {
+            onRunText?.invoke("nothing recorded yet")
+            return false
+        }
+        runner = Runner(
+            this, macro,
+            onState = { s -> onRunText?.invoke(s) },
+            onRun = { s -> onRun?.invoke(s) },
+        ).also { it.start() }
+        return true
+    }
+
+    fun togglePause() {
+        val r = runner ?: return
+        if (r.isPaused) r.resume() else r.pause()
+    }
+
+    fun stopRun(why: String) {
+        runner?.stop(why)
+        runner = null
+    }
+
+    /**
+     * True while an editor screen is in front.
+     *
+     * The runner asks before every capture. The foreground guard cannot cover this on its own:
+     * our own package is in [ignoredPackages], so while the editor is up `currentPackage()` keeps
+     * returning the target app and the guard passes.
+     */
+    fun editorInFront() = MainActivity.editorOpen
+
     @Volatile
     var latestFrame: Bitmap? = null
 
@@ -103,6 +156,13 @@ class ShadowService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         Log.i(TAG, "unbind ${System.identityHashCode(this)}")
+        // A run cannot outlive the service that captures and dispatches for it. Say so loudly:
+        // a silent stop here is what made the panel "vanish" during M2 and M3 testing, and it
+        // cost two milestones to diagnose.
+        if (runActive) {
+            Log.w(TAG, "stopping the run: the service was unbound")
+            stopRun("stopped: the service was unbound")
+        }
         overlay?.hide()
         overlay = null
         instance = null

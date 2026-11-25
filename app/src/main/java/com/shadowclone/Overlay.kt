@@ -42,7 +42,6 @@ class Overlay(private val svc: ShadowService) {
     /** Always the process-wide macro: the editor mutates the same object. */
     private val macro get() = Macro.current(svc)
 
-    private var runner: Runner? = null
     private var armed: Kind? = null
 
     /** Set from touch-up until the step is saved and re-dispatched; further touches are refused
@@ -106,9 +105,21 @@ class Overlay(private val svc: ShadowService) {
             row(
                 button("Clear") { clear() },
                 button("Move") { movePanel() },
-                button("Hide") { main.post { svc.toggleOverlay() } },
+                button("Hide") {
+                    // Hide is the user asking for the panel to go. A run with no panel has no
+                    // Stop, so it ends here rather than carrying on invisibly.
+                    svc.stopRun("stopped")
+                    main.post { svc.toggleOverlay() }
+                },
             )
         )
+
+        // The run belongs to the service; the panel is one view onto it.
+        svc.onRunText = { s ->
+            readout.text = s
+            labels()
+        }
+        svc.onRun = { }
 
         hud.onGesture = { sx, sy, ex, ey, held -> recorded(sx, sy, ex, ey, held) }
         wm.addView(hud, hudParams)
@@ -116,9 +127,16 @@ class Overlay(private val svc: ShadowService) {
         status()
     }
 
+    /**
+     * Takes the panel off screen. Deliberately does NOT stop the run: the editor hides the panel
+     * too, and there the run only pauses. The Hide button stops the run itself before calling
+     * this, so pressing Hide never leaves a run going with no Stop.
+     */
     fun hide() {
-        // Never leave a run or a recording going with no Stop button on screen.
-        stopAll("stopped")
+        disarm()
+        busy = false
+        svc.onRunText = null
+        svc.onRun = null
         runCatching { wm.removeView(panel) }
         runCatching { wm.removeView(hud) }
     }
@@ -170,8 +188,7 @@ class Overlay(private val svc: ShadowService) {
             return
         }
         // One capture loop at a time: concurrent takeScreenshot calls hit the rate limit and fail.
-        runner?.stop("stopped")
-        runner = null
+        svc.stopRun("stopped")
         armed = kind
         hud.recordMode = true
         hud.matchBox = null
@@ -201,10 +218,9 @@ class Overlay(private val svc: ShadowService) {
         recBtn.text = if (armed == Kind.STEP) "REC *" else "Rec"
         noTapBtn.text = if (armed == Kind.STOP) "NOTAP *" else "No-Tap"
         watchBtn.text = if (armed == Kind.WATCH) "WATCH *" else "Watch"
-        val r = runner
         playBtn.text = when {
-            r == null || !r.active -> "Play"
-            r.isPaused -> "Resume"
+            !svc.runActive -> "Play"
+            svc.runPaused -> "Resume"
             else -> "Pause"
         }
     }
@@ -314,32 +330,22 @@ class Overlay(private val svc: ShadowService) {
     // ---- replay ----
 
     private fun playPause() {
-        val r = runner
-        if (r != null && r.active) {
-            if (r.isPaused) r.resume() else r.pause()
+        if (svc.runActive) {
+            svc.togglePause()
             labels()
             return
         }
         disarm()
-        if (macro.steps.isEmpty()) {
-            status("nothing recorded yet")
-            return
-        }
         hud.matchBox = null
         hud.invalidate()
-        // Named, not a trailing lambda: Runner now takes onRun last, so a trailing lambda
-        // would silently bind to that instead of to onState.
-        runner = Runner(svc, macro, onState = { s ->
-            readout.text = s
-            labels()
-        }).also { it.start() }
+        // The service owns the run; it reports "nothing recorded yet" through onRunText.
+        svc.startRun()
         labels()
     }
 
     private fun stopAll(why: String) {
         disarm()
-        runner?.stop(why)
-        runner = null
+        svc.stopRun(why)
         busy = false
         labels()
         status(why)
@@ -358,7 +364,7 @@ class Overlay(private val svc: ShadowService) {
      * threshold can be tuned against the real app instead of guessed.
      */
     private fun score() {
-        if (runner?.active == true) {
+        if (svc.runActive) {
             status("stop the run first")
             return
         }

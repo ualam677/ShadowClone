@@ -129,7 +129,18 @@ class Runner(
     }
 
     private val tick = Runnable {
-        if (running && !paused) svc.capture { frame -> if (running && !paused) onFrame(frame) }
+        if (!running || paused) return@Runnable
+        // An open editor is our own screen. Capturing now would score the editor, every template
+        // would read near the not-on-screen baseline, and the step would burn its timeout -- all
+        // with the overlay gated off and no Stop anywhere. Hold the clock instead, exactly as the
+        // foreground guard does, and take no frame at all.
+        if (svc.editorInFront()) {
+            stepStart = System.currentTimeMillis()
+            say("paused: the editor is open", "editor open")
+            again()
+            return@Runnable
+        }
+        svc.capture { frame -> if (running && !paused) onFrame(frame) }
     }
 
     private fun again() {
