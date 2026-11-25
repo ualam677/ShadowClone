@@ -88,7 +88,7 @@ class Runner(
 
     private fun halt(why: String) {
         stop(why)
-        Toast.makeText(svc, "ShadowClone: $why", Toast.LENGTH_LONG).show()
+        Toast.makeText(svc, "Bunshin: $why", Toast.LENGTH_LONG).show()
     }
 
     private fun where(): String {

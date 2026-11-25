@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">ShadowClone</string>
+    <string name="app_name">Bunshin</string>
     <string name="service_desc">Records and replays screen-aware macros. Captures the screen and performs taps and swipes.</string>
 </resources>

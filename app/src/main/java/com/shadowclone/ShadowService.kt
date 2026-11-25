@@ -25,7 +25,7 @@ class ShadowService : AccessibilityService() {
 
         /** The FLAG_NOT_TOUCHABLE flip is applied asynchronously; give the window manager a frame. */
         const val TOUCHABLE_SETTLE_MS = 60L
-        const val TAG = "ShadowClone"
+        const val TAG = "Bunshin"
     }
 
     /**

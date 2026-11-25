@@ -1,4 +1,6 @@
-# ShadowClone — screen-aware macro tool (Android)
+# Bunshin — screen-aware macro tool (Android)
+
+(Formerly ShadowClone. The Kotlin package stays `com.shadowclone`; see the UI redesign spec.)
 
 Personal tool. No network, no Play Store. Target device: OnePlus 13 (CPH2653), Android 16 / API 36,
 1080x2376, connected over adb. Toolchain present: JDK 17, SDK platform 35, build-tools 35, gradle 8.11.1 cached.
