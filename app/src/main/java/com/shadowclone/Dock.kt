@@ -14,7 +14,7 @@ import android.widget.TextView
 import androidx.appcompat.view.ContextThemeWrapper
 
 /** What the user pressed. The overlay decides what each one does. */
-enum class Key { REC, NO_TAP, WATCH, PLAY, MORE, STOP, SCORE, CLEAR, HIDE }
+enum class Key { REC, NO_TAP, WATCH, PLAY, MORE, STOP, PAUSE, SCORE, CLEAR, HIDE }
 
 /**
  * The floating control bar.
@@ -96,6 +96,81 @@ class Dock(svc: ShadowService, private val onKey: (Key) -> Unit) {
         setPadding(gutter, gutter, gutter, gutter)
     }
 
+    // ---- the pill ----
+
+    /** Fills clockwise with step/steps. Same open ring as the app mark. */
+    private inner class Ring(c: android.content.Context) : View(c) {
+        var progress = 0f
+        private val track = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeCap = android.graphics.Paint.Cap.ROUND
+            color = colour(R.color.line)
+        }
+        private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeCap = android.graphics.Paint.Cap.ROUND
+            color = colour(R.color.primary)
+        }
+        private val box = android.graphics.RectF()
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            val w = px(R.dimen.space_4).toFloat() * 0.9f
+            track.strokeWidth = w
+            fill.strokeWidth = w
+            val pad = w / 2 + 1
+            box.set(pad, pad, width - pad, height - pad)
+            // 285 degrees of arc with the gap at the top right, as the mark has it.
+            canvas.drawArc(box, START, SWEEP, false, track)
+            if (progress > 0f) canvas.drawArc(box, START, SWEEP * progress, false, fill)
+        }
+    }
+
+    private val ring = Ring(ctx)
+
+    private val pillText = TextView(ctx).apply {
+        setTextColor(colour(R.color.text))
+        textSize = res.getDimension(R.dimen.text_secondary) / res.displayMetrics.scaledDensity
+        typeface = android.graphics.Typeface.MONOSPACE
+        maxLines = 2
+    }
+
+    private val body = LinearLayout(ctx).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+    }
+
+    private val stopKey = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        background = keyBackground(colour(R.color.rec))
+        addView(TextView(ctx).apply {
+            text = "\u25A0"
+            setTextColor(colour(R.color.rec))
+            textSize = res.getDimension(R.dimen.dock_glyph) / res.displayMetrics.scaledDensity
+            gravity = Gravity.CENTER
+        })
+        addView(TextView(ctx).apply {
+            text = "Stop"
+            setTextColor(colour(R.color.text))
+            textSize = res.getDimension(R.dimen.text_secondary) / res.displayMetrics.scaledDensity
+            gravity = Gravity.CENTER
+        })
+        setOnClickListener { onKey(Key.STOP) }
+    }
+
+    /**
+     * Replaces the key row while a run is going. It keeps the row's exact footprint rather than
+     * shrinking to a smaller pill: the panel is in both record frames and replay frames, and a
+     * different shape at replay would mean replay frames contain pixels no record frame had.
+     */
+    private val pill = LinearLayout(ctx).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = panelBackground()
+        setPadding(gutter, gutter, gutter, gutter)
+        visibility = View.GONE
+    }
+
     /** The whole dock: strip, sheet, keys. */
     val view: LinearLayout = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
@@ -104,6 +179,7 @@ class Dock(svc: ShadowService, private val onKey: (Key) -> Unit) {
         addView(sheet, LinearLayout.LayoutParams(dockWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
             .apply { bottomMargin = gap })
         addView(row, LinearLayout.LayoutParams(dockWidth, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(pill, LinearLayout.LayoutParams(dockWidth, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
     /** Where the dock is on screen, for the crop-overlap warning. */
@@ -122,15 +198,43 @@ class Dock(svc: ShadowService, private val onKey: (Key) -> Unit) {
         key(Key.WATCH, "◉", "Watch", R.color.watcher)
         key(Key.PLAY, "▶", "Play", R.color.go)
         key(Key.MORE, "⋯", "More", R.color.muted)
-        // The fifth key is More while idle and Stop while running, so Stop is always one
-        // tap. Until Task 6 brings the status pill there would otherwise be no Stop at all
-        // during a run, which is the one thing this design must never allow.
-        keys[Key.MORE]?.setOnClickListener { onKey(if (running) Key.STOP else Key.MORE) }
 
         sheet.addView(summary)
         sheetButton(Key.SCORE, "Score")
         sheetButton(Key.CLEAR, "Clear")
         sheetButton(Key.HIDE, "Hide")
+
+        // Tapping the body toggles pause; Stop is its own button. Both are one tap, which is
+        // what keeps the anti-goal true while the keys are hidden.
+        body.addView(ring, LinearLayout.LayoutParams(px(R.dimen.space_32), px(R.dimen.space_32))
+            .apply { marginEnd = px(R.dimen.space_12); gravity = Gravity.CENTER_VERTICAL })
+        body.addView(pillText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            .apply { gravity = Gravity.CENTER_VERTICAL })
+        body.setOnClickListener { onKey(Key.PAUSE) }
+        pill.addView(body, LinearLayout.LayoutParams(0, keyH, 1f))
+        pill.addView(stopKey, LinearLayout.LayoutParams(keyW, keyH)
+            .apply { marginStart = gap })
+    }
+
+    /** Non-null collapses the dock to the pill; null restores the keys. */
+    fun showPill(state: RunState?) {
+        if (state == null) {
+            pill.visibility = View.GONE
+            row.visibility = View.VISIBLE
+            return
+        }
+        closeSheet()
+        row.visibility = View.GONE
+        pill.visibility = View.VISIBLE
+        ring.progress =
+            if (state.steps > 0) state.step.toFloat() / state.steps else 0f
+        ring.invalidate()
+        val loops = if (state.loops == 0) "L${state.loop}" else "L${state.loop}/${state.loops}"
+        pillText.text = when {
+            state.pausedFor != null -> "waiting for ${state.pausedFor}"
+            state.paused -> "paused  ${state.step}/${state.steps}  $loops"
+            else -> "${state.step}/${state.steps}  $loops  %.2f".format(state.score)
+        }
     }
 
     private fun panelBackground() = GradientDrawable().apply {
@@ -210,19 +314,6 @@ class Dock(svc: ShadowService, private val onKey: (Key) -> Unit) {
         }
     }
 
-    private var running = false
-
-    /** Swaps the fifth key between More and Stop. */
-    fun setRunning(active: Boolean) {
-        running = active
-        glyphs[Key.MORE]?.apply {
-            text = if (active) "■" else "⋯"
-            setTextColor(colour(if (active) R.color.rec else R.color.muted))
-        }
-        labels[Key.MORE]?.text = if (active) "Stop" else "More"
-        if (active) closeSheet()
-    }
-
     fun setPlayLabel(text: String) {
         labels[Key.PLAY]?.text = text
     }
@@ -276,5 +367,9 @@ class Dock(svc: ShadowService, private val onKey: (Key) -> Unit) {
 
     private companion object {
         const val STRIP_MS = 4_000L
+
+        /** The mark's ring: 285 degrees with the gap at the top right. */
+        const val START = 60f
+        const val SWEEP = 285f
     }
 }

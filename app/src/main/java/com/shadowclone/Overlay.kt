@@ -45,6 +45,9 @@ class Overlay(private val svc: ShadowService) {
      *  rather than passed through, or the recording would drift from what the app actually got. */
     private var busy = false
 
+    /** The latest run state, so the pill can be rebuilt whenever anything else changes. */
+    private var lastRun: RunState? = null
+
     private val hudParams = WindowManager.LayoutParams(
         WindowManager.LayoutParams.MATCH_PARENT,
         WindowManager.LayoutParams.MATCH_PARENT,
@@ -80,10 +83,18 @@ class Overlay(private val svc: ShadowService) {
 
         // The run belongs to the service; the dock is one view onto it.
         svc.onRunText = { s ->
-            dock.say(s)
+            // Only when no pill is up. The runner reports every frame, so routing this to the
+            // strip during a run re-shows it ~3 times a second: it never auto-hides, it makes
+            // the dock permanently taller, and it says what the pill is already showing.
+            // Final messages ("done: ...", "stopped by a no-tap rule") arrive once the run is
+            // no longer active, so they still reach the strip.
+            if (!svc.runActive) dock.say(s)
             labels()
         }
-        svc.onRun = { }
+        svc.onRun = { state ->
+            lastRun = state
+            refreshPill()
+        }
 
         hud.onGesture = { sx, sy, ex, ey, held -> recorded(sx, sy, ex, ey, held) }
         wm.addView(hud, hudParams)
@@ -120,6 +131,7 @@ class Overlay(private val svc: ShadowService) {
             Key.NO_TAP -> arm(Kind.STOP)
             Key.WATCH -> arm(Kind.WATCH)
             Key.PLAY -> playPause()
+            Key.PAUSE -> { svc.togglePause(); labels() }
             Key.STOP -> stopAll("stopped")
             Key.MORE -> dock.toggleSheet()
             Key.SCORE -> { dock.closeSheet(); score() }
@@ -212,9 +224,13 @@ class Overlay(private val svc: ShadowService) {
         labels()
     }
 
+    private fun refreshPill() {
+        dock.showPill(if (svc.runActive) lastRun else null)
+    }
+
     private fun labels() {
         dock.setArmed(armed)
-        dock.setRunning(svc.runActive)
+        refreshPill()
         dock.setPlayLabel(
             when {
                 !svc.runActive -> "Play"
