@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The clone seal, monochrome and tintable, for in-app use.
+
+  Two pairs of crossed fingers (the Kage Bunshin seal) tilted 20 degrees inside an open
+  ring. Fingers are strokes with round caps rather than rounded-rect paths: a 7-wide
+  stroke with a round cap IS a finger, in one path command.
+
+  The ring is an explicit 285-degree arc. VectorDrawable has no strokeDasharray, so the
+  gap cannot be made with a dashed circle.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64"
+    android:tint="?android:attr/textColorPrimary">
+
+    <group
+        android:pivotX="32"
+        android:pivotY="32"
+        android:rotation="20">
+
+        <!-- open ring: arc from 60 to 345 degrees, gap at the top right -->
+        <path
+            android:pathData="M45.5,55.38 A27,27 0 1 1 58.08,25.01"
+            android:strokeColor="#FFFFFF"
+            android:strokeAlpha="0.75"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round" />
+
+        <!-- the hand behind -->
+        <group>
+            <path
+                android:pathData="M16.5,27.5 L47.5,27.5"
+                android:strokeColor="#FFFFFF"
+                android:strokeAlpha="0.55"
+                android:strokeWidth="7"
+                android:strokeLineCap="round" />
+            <path
+                android:pathData="M16.5,37 L47.5,37"
+                android:strokeColor="#FFFFFF"
+                android:strokeAlpha="0.55"
+                android:strokeWidth="7"
+                android:strokeLineCap="round" />
+        </group>
+
+        <!-- the hand in front -->
+        <path
+            android:pathData="M27.5,16.5 L27.5,47.5"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="7"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M37,16.5 L37,47.5"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="7"
+            android:strokeLineCap="round" />
+    </group>
+</vector>

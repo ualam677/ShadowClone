@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Launcher foreground: the seal in two tones.
+
+  108x108 is the adaptive-icon canvas; only the middle 66 is guaranteed visible under
+  every launcher mask, so the 64-unit artwork is translated to 22,22 and left at 1:1.
+
+  The front hand is drawn twice: once in the background colour at a wider stroke, then
+  in primary. That wider pass is the cut, and it makes the crossing read as one hand
+  passing over the other rather than as four bars meeting.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group android:translateX="22" android:translateY="22">
+        <group
+            android:pivotX="32"
+            android:pivotY="32"
+            android:rotation="20">
+
+            <path
+                android:pathData="M45.5,55.38 A27,27 0 1 1 58.08,25.01"
+                android:strokeColor="@color/primary_recessed"
+                android:strokeWidth="3.5"
+                android:strokeLineCap="round" />
+
+            <!-- the hand behind -->
+            <path
+                android:pathData="M16.5,27.5 L47.5,27.5"
+                android:strokeColor="@color/primary_recessed"
+                android:strokeWidth="7"
+                android:strokeLineCap="round" />
+            <path
+                android:pathData="M16.5,37 L47.5,37"
+                android:strokeColor="@color/primary_recessed"
+                android:strokeWidth="7"
+                android:strokeLineCap="round" />
+
+            <!-- the cut: background colour, wider, under the front hand -->
+            <path
+                android:pathData="M27.5,16.5 L27.5,47.5"
+                android:strokeColor="@color/bg"
+                android:strokeWidth="11"
+                android:strokeLineCap="round" />
+            <path
+                android:pathData="M37,16.5 L37,47.5"
+                android:strokeColor="@color/bg"
+                android:strokeWidth="11"
+                android:strokeLineCap="round" />
+
+            <!-- the hand in front -->
+            <path
+                android:pathData="M27.5,16.5 L27.5,47.5"
+                android:strokeColor="@color/primary"
+                android:strokeWidth="7"
+                android:strokeLineCap="round" />
+            <path
+                android:pathData="M37,16.5 L37,47.5"
+                android:strokeColor="@color/primary"
+                android:strokeWidth="7"
+                android:strokeLineCap="round" />
+        </group>
+    </group>
+</vector>
