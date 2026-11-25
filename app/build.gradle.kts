@@ -28,4 +28,11 @@ android {
 
 dependencies {
     implementation("org.opencv:opencv:4.14.0")
+
+    // The UI redesign needs these three and nothing more: appcompat for the themed
+    // activity, material for the bottom sheet and themed controls, recyclerview for
+    // the lists and ItemTouchHelper's drag-to-reorder.
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
 }

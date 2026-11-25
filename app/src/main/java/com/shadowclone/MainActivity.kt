@@ -1,6 +1,5 @@
 package com.shadowclone
 
-import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
@@ -13,12 +12,13 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
 
 /**
  * The macro editor. The overlay cannot do this job: its window takes no keyboard, and the panel
  * would sit on top of the list. So the overlay is hidden while this screen is in front.
  */
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
 
     companion object {
         /**

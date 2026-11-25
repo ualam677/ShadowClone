@@ -54,6 +54,9 @@ class ShadowService : AccessibilityService() {
 
     override fun onServiceConnected() {
         OpenCVLoader.initLocal()
+        // There is no test source set; selfTest is this project's assertions. Logging it on
+        // every connect is how they are read: `adb logcat -d -s Bunshin | grep self-test`.
+        Log.i(TAG, Macro.selfTest())
         instance = this
         // Which of the two happens -- rebind of this instance, or a fresh instance -- decides what
         // M2 has to do to keep a run alive, so make it identifiable in logcat.

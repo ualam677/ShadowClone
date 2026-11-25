@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The whole palette. Dark only: the overlay sits on top of a game, often at night.
+  Semantic colours mean the same thing on the overlay and in the editor.
+-->
+<resources>
+    <!-- brand -->
+    <color name="primary">#FF8A3C</color>
+    <color name="primary_pressed">#E8701A</color>
+    <color name="primary_recessed">#C96A20</color>
+
+    <!-- what a trigger is. no_tap is yellow, not amber, so it cannot be read as the brand orange -->
+    <color name="rec">#FF453A</color>
+    <color name="no_tap">#FFD426</color>
+    <color name="watcher">#4C8DFF</color>
+    <color name="go">#32D74B</color>
+
+    <!-- surfaces -->
+    <color name="bg">#121316</color>
+    <color name="surface">#1C1E22</color>
+    <color name="raised">#262A31</color>
+    <color name="line">#333841</color>
+    <color name="text">#F2F3F5</color>
+    <color name="muted">#9AA0A8</color>
+</resources>
