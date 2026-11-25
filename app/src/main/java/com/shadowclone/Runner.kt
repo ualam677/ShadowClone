@@ -17,6 +17,11 @@ class Runner(
     private val svc: ShadowService,
     private val macro: Macro,
     private val onState: (String) -> Unit,
+    /**
+     * The same progress as [onState], as values. The pill reads this; the readout reads the
+     * string. Defaulted so existing construction keeps compiling.
+     */
+    private val onRun: (RunState) -> Unit = {},
 ) {
     private companion object {
         /** A popup that lingers would otherwise be tapped on every frame. */
@@ -63,7 +68,7 @@ class Runner(
         // keeps the next step from matching the screen the app has not navigated away from yet.
         heldTick = (tickDueAt - now).coerceAtLeast(0)
         main.removeCallbacks(tick)
-        onState("paused by you  ${where()}")
+        say("paused by you  ${where()}")
     }
 
     fun resume() {
@@ -83,7 +88,7 @@ class Runner(
         running = false
         paused = false
         main.removeCallbacks(tick)
-        onState(why)
+        say(why)
     }
 
     private fun halt(why: String) {
@@ -94,6 +99,33 @@ class Runner(
     private fun where(): String {
         val of = if (macro.loops == 0) "$loop" else "$loop/${macro.loops}"
         return "step ${i + 1}/${macro.steps.size}  loop $of"
+    }
+
+    /** The most recent score for the current step, so the pill has a number between frames. */
+    private var lastScore = 0.0
+
+    /**
+     * Reports progress as values alongside the string [onState] already sends. Purely additive:
+     * it reads the same fields [where] does and changes no control flow.
+     */
+    private fun report(pausedFor: String? = null) {
+        onRun(
+            RunState(
+                step = i + 1,
+                steps = macro.steps.size,
+                loop = loop,
+                loops = macro.loops,
+                score = lastScore,
+                paused = paused || pausedFor != null,
+                pausedFor = pausedFor,
+            )
+        )
+    }
+
+    /** [onState] and [report] together, for the common case. */
+    private fun say(text: String, pausedFor: String? = null) {
+        onState(text)
+        report(pausedFor)
     }
 
     private val tick = Runnable {
@@ -117,6 +149,7 @@ class Runner(
         // No-tap rules win over everything, and never dispatch anything.
         for (s in macro.stops) {
             val m = Templates.match(svc, frame, s) ?: continue
+            Scores.put(s.template, m.score)
             if (m.score >= s.threshold) {
                 halt("stopped by a no-tap rule (%.3f)".format(m.score))
                 return
@@ -129,7 +162,7 @@ class Runner(
         if (want.isNotEmpty() && fg !in want) {
             // Hold the clock, or coming back would time the step out at once.
             stepStart = System.currentTimeMillis()
-            onState("paused: ${fg ?: "unknown"} in front, not one of the ${want.size} recorded")
+            say("paused: ${fg ?: "unknown"} in front, not one of the ${want.size} recorded", fg ?: "unknown")
             again(); return
         }
 
@@ -139,9 +172,10 @@ class Runner(
         for (w in macro.watchers) {
             if (now - (watcherFiredAt[w.template] ?: 0L) < WATCHER_COOLDOWN_MS) continue
             val m = Templates.match(svc, frame, w) ?: continue
+            Scores.put(w.template, m.score)
             if (m.score < w.threshold) continue
             watcherFiredAt[w.template] = now
-            onState("watcher %.3f  %s  %s".format(m.score, w.act, where()))
+            say("watcher %.3f  %s  %s".format(m.score, w.act, where()))
             dispatch(w, m) { ok ->
                 if (!running) return@dispatch
                 if (!ok) return@dispatch halt("the system rejected a watcher gesture")
@@ -153,8 +187,10 @@ class Runner(
         val step = macro.steps[i]
         val m = Templates.match(svc, frame, step)
         val score = m?.score ?: 0.0
+        lastScore = score
+        Scores.put(step.template, score)
         if (m != null && score >= step.threshold) {
-            onState("%s  %.3f  %s".format(where(), score, step.act))
+            say("%s  %.3f  %s".format(where(), score, step.act))
             dispatch(step, m) { ok ->
                 if (!running) return@dispatch
                 if (!ok) return@dispatch halt("the system rejected the gesture on step ${i + 1}")
@@ -168,7 +204,7 @@ class Runner(
             halt("timed out on step %d after %ds (best %.3f)".format(i + 1, waited / 1000, score))
             return
         }
-        onState("%s waiting  %.3f  %ds".format(where(), score, waited / 1000))
+        say("%s waiting  %.3f  %ds".format(where(), score, waited / 1000))
         again()
     }
 
@@ -181,7 +217,7 @@ class Runner(
         }
         if (macro.loops != 0 && loop >= macro.loops) {
             running = false
-            onState("done: ${macro.steps.size} steps x $loop")
+            say("done: ${macro.steps.size} steps x $loop")
             return
         }
         loop++

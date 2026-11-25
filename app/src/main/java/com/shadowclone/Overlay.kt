@@ -327,10 +327,12 @@ class Overlay(private val svc: ShadowService) {
         }
         hud.matchBox = null
         hud.invalidate()
-        runner = Runner(svc, macro) { s ->
+        // Named, not a trailing lambda: Runner now takes onRun last, so a trailing lambda
+        // would silently bind to that instead of to onState.
+        runner = Runner(svc, macro, onState = { s ->
             readout.text = s
             labels()
-        }.also { it.start() }
+        }).also { it.start() }
         labels()
     }
 
@@ -380,6 +382,8 @@ class Overlay(private val svc: ShadowService) {
                 for ((tag, list) in listOf("S" to macro.steps, "W" to macro.watchers, "N" to macro.stops)) {
                     list.forEachIndexed { n, s ->
                         val sc = Templates.match(svc, frame, s)?.score ?: 0.0
+                        // The step sheet cannot score live, so it reads what Score found here.
+                        Scores.put(s.template, sc)
                         lines += "%s%d %.3f/%.2f %s".format(
                             tag, n + 1, sc, s.threshold, if (sc >= s.threshold) "HIT" else "-"
                         )

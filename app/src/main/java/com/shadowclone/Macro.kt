@@ -88,6 +88,9 @@ class Macro(
     /** How many times to run the steps. 0 means keep going until stopped or a no-tap rule fires. */
     var loops: Int = 1,
 ) {
+    /** What the user calls this macro. Null means "show the target app's label instead". */
+    var name: String? = null
+
     fun list(kind: Kind): MutableList<Step> = when (kind) {
         Kind.STEP -> steps
         Kind.WATCH -> watchers
@@ -95,6 +98,9 @@ class Macro(
     }
 
     fun text(): String = JSONObject()
+        // putOpt leaves the key out entirely when the name is null, so an unnamed macro
+        // round trips to no key rather than to the string "null".
+        .putOpt("name", name)
         .put("pkgs", JSONArray(pkgs.toList()))
         .put("loops", loops)
         .put("steps", array(steps))
@@ -160,6 +166,8 @@ class Macro(
         fun parse(s: String): Macro {
             val o = JSONObject(s)
             val m = Macro(loops = o.optInt("loops", 1))
+            // Files written before this field have no key at all.
+            m.name = if (o.isNull("name")) null else o.optString("name").ifEmpty { null }
             val a = o.optJSONArray("pkgs")
             if (a != null) for (i in 0 until a.length()) m.pkgs += a.getString(i)
             // Macros recorded before this held a single package.
@@ -209,6 +217,20 @@ class Macro(
 
             val r = m.steps[0].copy(searchPad = 50).region(40, 40, 1080, 2376)
             if (r != Rect(30, 30, 170, 170)) bad += "region=$r"
+
+            // A name survives the JSON round trip, and its absence stays absent.
+            val named = Macro()
+            named.name = "Challenge loop"
+            if (parse(named.text()).name != "Challenge loop") bad += "name-json"
+            if (parse(Macro().text()).name != null) bad += "name-absent"
+            // Files written before this field load without one.
+            if (parse("""{"steps":[]}""").name != null) bad += "name-old-json"
+
+            // The score cache round trips, and an unscored template has no entry.
+            Scores.put("t0.png", 0.94)
+            val got = Scores.get("t0.png")
+            if (got == null || got.first != 0.94) bad += "scores"
+            if (Scores.get("missing.png") != null) bad += "scores-absent"
 
             return if (bad.isEmpty()) "macro self-test PASS"
             else "macro self-test FAIL: " + bad.joinToString()
